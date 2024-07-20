@@ -1,4 +1,7 @@
-C_FLAGS := -g -Wall -Wextra
+ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer -Wno-format-security
+ASAN_LIBS  = -static-libasan
+CFLAGS    := -Wall -Wextra -Werror --std=gnu99 -g3
+LDFLAGS   += -lpthread
 CC := gcc
 RM := rm -rf
 
@@ -20,8 +23,8 @@ SERVER_SRC := servidor.c
 CLIENT_SRC := cliente.c
 
 # Object files
-SERVER_OBJ := $(OBJ_PATH)servidor.o
-CLIENT_OBJ := $(OBJ_PATH)cliente.o
+SERVER_OBJ := $(OBJ_PATH)servidor.o $(OBJ_PATH)jogo.o
+CLIENT_OBJ := $(OBJ_PATH)cliente.o $(OBJ_PATH)jogo.o
 
 # Build all
 all: $(SERVER_TARGET) $(CLIENT_TARGET)

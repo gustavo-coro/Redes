@@ -4,16 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void initialize_board(char (*)[3]);
+void initialize_board(char*);
 void draw_instructions();
-void draw_board(char (*)[3]);
-void change_player(char*);
-int make_move(char (*)[3], char,
+void draw_board(char*);
+int make_move(char*, char,
               int);  // return 0 in case the movement is invalid
-int check_row(char (*)[3]);
-int check_column(char (*)[3]);
-int check_diagonal(char (*)[3]);
-int check_win(char (*)[3]);
-void run_game();
+int check_row(char*);
+int check_column(char*);
+int check_diagonal(char*);
+int check_win(char*);
 
 #endif

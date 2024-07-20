@@ -1,23 +1,22 @@
 #include "../include/servidor.h"
 
-void error(const char* msg) {
-    perror(msg);
-    exit(1);
+#include "../include/jogo.h"
+
+int playersConnected = 0;
+pthread_mutex_t mutexCount;
+
+void error(const char* message) {
+    perror(message);
+    pthread_exit(NULL);
 }
 
-void start_socket(int* sockfd, int portno, struct sockaddr_in* serverAddr,
-                  int* clientSockets, int maxClients) {
+void start_socket(int* sockfd, int portno, struct sockaddr_in* serverAddr) {
     *sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (*sockfd < 0) error("ERRO ao abrir o socket");
-
-    for (int i = 0; i < maxClients; i++) {
-        clientSockets[i] = 0;
-    }
-
     int opt = 1;
     if (setsockopt(*sockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt,
                    sizeof(opt)) < 0) {
-        error("setsockopt");
+        error("Erro no setsockopt");
     }
 
     printf("Socket do Server Criado com Sucesso!\n");
@@ -31,103 +30,169 @@ void start_socket(int* sockfd, int portno, struct sockaddr_in* serverAddr,
     }
 
     printf("Bind na Porta numero %d.\n", portno);
-
-    if (listen(*sockfd, maxClients) < 0) {
-        error("ERRO no listening");
-    }
-
-    printf("Listening...\n");
 }
 
-void make_connections(socklen_t* cli_len, int* sockfd, int* newSocket,
-                      struct sockaddr_in* cliAddr, fd_set* readFds,
-                      int* clientSockets, int* sd, int maxClients) {
-    FD_ZERO(readFds);
-    FD_SET(*sockfd, readFds);
-    int max_sd = *sockfd;
+void send_buffer(int clientSocket, const void* buffer, size_t len) {
+    int n = write(clientSocket, buffer, len);
+    if (n < 0) error("Erro ao mandar mensagem ao cliente");
+}
 
-    for (int i = 0; i < maxClients; i++) {
-        *sd = clientSockets[i];
+void send_buffer_to_all_clients(int* clientSockets, const void* buffer,
+                                size_t len) {
+    send_buffer(clientSockets[0], buffer, len);
+    send_buffer(clientSockets[1], buffer, len);
+}
 
-        if (*sd > 0) FD_SET(*sd, readFds);
+int receive_int(int clientSocket) {
+    int message = 0;
+    int n = read(clientSocket, &message, sizeof(int));
 
-        if (*sd > max_sd) max_sd = *sd;
-    }
+    if (n < 0 || n != sizeof(int)) return -1;
 
-    int activity = select(max_sd + 1, readFds, NULL, NULL, NULL);
-    if ((activity < 0) && (errno != EINTR)) {
-        printf("erro no select");
-    }
+    return message;
+}
 
-    if (FD_ISSET(*sockfd, readFds)) {
-        *cli_len = sizeof(*cliAddr);
-        if ((*newSocket = accept(*sockfd, (struct sockaddr*)cliAddr, cli_len)) <
-            0) {
-            error("accept");
+void make_connections(int* sockfd, int* clientSockets,
+                      struct sockaddr_in* cliAddr, socklen_t* cliLen) {
+    int connections = 0;
+    while (connections < 2) {
+        listen(*sockfd, 2);
+        memset(cliAddr, 0, sizeof(*clientSockets));
+
+        *cliLen = sizeof(*cliAddr);
+        clientSockets[connections] =
+            accept(*sockfd, (struct sockaddr*)cliAddr, cliLen);
+        if (clientSockets[connections] < 0) error("Erro ao aceitar conexao");
+
+        write(clientSockets[connections], &connections, sizeof(int));
+
+        pthread_mutex_lock(&mutexCount);
+        playersConnected++;
+        printf("Numero de jogadores conectados atualizado: %d.\n", playersConnected);
+        pthread_mutex_unlock(&mutexCount);
+
+        if (connections == 0) {
+            send_buffer(clientSockets[0], "HLD", strlen("HLD"));
         }
-
-        printf("Nova conexao, socket fd e %d, ip e : %s, porta : %d\n",
-               *newSocket, inet_ntoa(cliAddr->sin_addr),
-               ntohs(cliAddr->sin_port));
-
-        for (int i = 0; i < maxClients; i++) {
-            if (clientSockets[i] == 0) {
-                clientSockets[i] = *newSocket;
-                printf("Adicionando para a lista de sockets como %d\n", i);
-                break;
-            }
-        }
+        connections++;
     }
 }
 
-void talk_to_client(char buffer[2048], fd_set* readFds, int* sd,
-                    int* clientSockets, struct sockaddr_in* cliAddr,
-                    socklen_t* cli_len, int maxClients) {
-    for (int i = 0; i < maxClients; i++) {
-        *sd = clientSockets[i];
+int get_player_move(int clientSocket) {
+    send_buffer(clientSocket, "TRN", strlen("TRN"));
 
-        if (FD_ISSET(*sd, readFds)) {
-            int valread = read(*sd, buffer, 2048);
-            if (valread == 0) {
-                getpeername(*sd, (struct sockaddr*)cliAddr, cli_len);
-                printf("Host desconectado, ip %s, porta %d\n",
-                       inet_ntoa(cliAddr->sin_addr), ntohs(cliAddr->sin_port));
-                close(*sd);
-                clientSockets[i] = 0;
-            } else {
-                buffer[valread] = '\0';
-                printf("Mensagem recebida: %s\n", buffer);
-                send(*sd, buffer, strlen(buffer), 0);
+    return receive_int(clientSocket);
+}
+
+void send_update(int* clientSockets, int move, int id) {
+    send_buffer_to_all_clients(clientSockets, "UPD", strlen("UPD"));
+    send_buffer_to_all_clients(clientSockets, &id, sizeof(int));
+    send_buffer_to_all_clients(clientSockets, &move, sizeof(int));
+}
+
+void* run_game(void* thread_data) {
+    int* clientSockets = (int*)thread_data;
+    char board[9];
+
+    send_buffer_to_all_clients(clientSockets, "SRT", strlen("SRT"));
+
+    initialize_board(board);
+
+    int prev_player_turn = 1;
+    int player_turn = 0;
+    int game_over = 0;
+    int turn_count = 0;
+    while (!game_over) {
+        if (prev_player_turn != player_turn) {
+            send_buffer(clientSockets[(player_turn + 1) % 2], "WAT",
+                        strlen("WAT"));
+        }
+
+        int valid = 0;
+        int move = 0;
+        while (!valid) {
+            move = get_player_move(clientSockets[player_turn]);
+            if (move == -1) break;
+
+            valid = make_move(board, player_turn ? 'O' : 'X', move);
+            if (!valid) {
+                send_buffer(clientSockets[(player_turn + 1) % 2], "INV",
+                            strlen("INV"));
             }
         }
+
+        if (move == -1) {
+            break;
+        } else {
+            send_update(clientSockets, move, player_turn);
+
+            game_over = check_win(board);
+
+            if (game_over == 1) {
+                send_buffer(clientSockets[player_turn], "WIN", strlen("WIN"));
+                send_buffer(clientSockets[(player_turn + 1) % 2], "LSE",
+                            strlen("LSE"));
+            } else if (turn_count == 8) {
+                send_buffer_to_all_clients(clientSockets, "DRW", strlen("DRW"));
+                game_over = 1;
+            }
+
+            prev_player_turn = player_turn;
+            player_turn = (player_turn + 1) % 2;
+            turn_count++;
+        }
     }
+
+    close(clientSockets[0]);
+    close(clientSockets[1]);
+
+    pthread_mutex_lock(&mutexCount);
+    playersConnected -= 2;
+    pthread_mutex_unlock(&mutexCount);
+    free(clientSockets);
+
+    printf("Numero de jogadores conectados atualizado: %d.\n", playersConnected);
+
+    pthread_exit(NULL);
 }
 
 int main(int argc, char** argv) {
-    char buffer[2048];
-    int sockfd, newSocket, portno, maxClients = 2, sd;
-    int clientSockets[maxClients];
-    socklen_t cli_len;
-    struct sockaddr_in serverAddr, cliAddr;
-    fd_set readFds;
-
     if (argc < 2) {
         fprintf(stderr, "ERRO! porta nao providenciada.\n");
         exit(1);
     }
 
+    int sockfd, newSocket, portno, sd;
+    int* clientSockets;
+    socklen_t cliLen;
+    struct sockaddr_in serverAddr, cliAddr;
+    fd_set readFds;
+
     portno = atoi(argv[1]);
 
-    start_socket(&sockfd, portno, &serverAddr, clientSockets, maxClients);
+    start_socket(&sockfd, portno, &serverAddr);
+
+    pthread_mutex_init(&mutexCount, NULL);
 
     while (1) {
-        make_connections(&cli_len, &sockfd, &newSocket, &cliAddr, &readFds,
-                         clientSockets, &sd, maxClients);
+        if (playersConnected <= 252) {
+            int* clientSockets = (int*)malloc(2 * sizeof(int));
+            memset(clientSockets, 0, 2 * sizeof(int));
 
-        talk_to_client(buffer, &readFds, &sd, clientSockets,
-                       &cliAddr, &cli_len, maxClients);
+            make_connections(&sockfd, clientSockets, &cliAddr, &cliLen);
+
+            pthread_t thread;
+            int result =
+                pthread_create(&thread, NULL, run_game, (void*)clientSockets);
+            if (result) {
+                printf("Criacao da thread falhou! Retorno: %d\n", result);
+                exit(-1);
+            }
+        }
     }
 
     close(sockfd);
+    pthread_mutex_destroy(&mutexCount);
+    pthread_exit(NULL);
     return 1;
 }

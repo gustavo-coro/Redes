@@ -9,6 +9,11 @@
 
 void error(const char *);
 void make_connection(int *, int, struct sockaddr_in *);
-void talk_to_server(char[2048], int *);
+void receive_message(int*, char*);
+int receive_int(int*);
+void send_int(int*, int);
+void make_a_move(int*);
+void receive_update(int*, char*);
+
 
 #endif
