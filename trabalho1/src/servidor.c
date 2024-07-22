@@ -1,6 +1,6 @@
 #include "../include/servidor.h"
 
-#include "../include/jogo.h"
+#include "../include/yatzy.h"
 
 int playersConnected = 0;
 pthread_mutex_t mutexCount;
@@ -48,8 +48,14 @@ int receive_int(int clientSocket) {
     int n = read(clientSocket, &message, sizeof(int));
 
     if (n < 0 || n != sizeof(int)) return -1;
-
     return message;
+}
+
+void receive_ints(int clientSocket, int message[5]) {
+    int n = read(clientSocket, message, sizeof(int) * 5);
+
+    if (n < 0 || n != (sizeof(int) * 5))
+        error("Erro recebendo inteiro do cliente");
 }
 
 void make_connections(int* sockfd, int* clientSockets,
@@ -68,7 +74,8 @@ void make_connections(int* sockfd, int* clientSockets,
 
         pthread_mutex_lock(&mutexCount);
         playersConnected++;
-        printf("Numero de jogadores conectados atualizado: %d.\n", playersConnected);
+        printf("Numero de jogadores conectados atualizado: %d.\n",
+               playersConnected);
         pthread_mutex_unlock(&mutexCount);
 
         if (connections == 0) {
@@ -78,69 +85,106 @@ void make_connections(int* sockfd, int* clientSockets,
     }
 }
 
-int get_player_move(int clientSocket) {
+int* send_player_dices(int clientSocket) {
     send_buffer(clientSocket, "TRN", strlen("TRN"));
+    int* dice = (int*)malloc(sizeof(int) * NUM_DICE);
+    for (int i = 0; i < 3; i++) {
+        receive_ints(clientSocket, dice);
+        rollDice(dice);
+        send_buffer(clientSocket, dice, sizeof(int) * 5);
+    }
+    return dice;
+}
+
+int get_category(int clientSocket) {
+    send_buffer(clientSocket, "CAT", strlen("CAT"));
 
     return receive_int(clientSocket);
 }
 
-void send_update(int* clientSockets, int move, int id) {
-    send_buffer_to_all_clients(clientSockets, "UPD", strlen("UPD"));
+void send_update(int* clientSockets, int position, int id, int score) {
     send_buffer_to_all_clients(clientSockets, &id, sizeof(int));
-    send_buffer_to_all_clients(clientSockets, &move, sizeof(int));
+    send_buffer_to_all_clients(clientSockets, &position, sizeof(int));
+    send_buffer_to_all_clients(clientSockets, &score, sizeof(int));
+}
+
+void send_updated_table(int* clientSockets, int* player, int category, int id) {
+    send_buffer_to_all_clients(clientSockets, "UPD", strlen("UPD"));
+    int number_att = 2;
+    if (category >= 1 && category <= 6) {
+        number_att = 4;
+        send_buffer_to_all_clients(clientSockets, &number_att, sizeof(int));
+        send_update(clientSockets, category - 1, id, player[category - 1]);
+        send_update(clientSockets, 6, id, player[6]);
+        send_update(clientSockets, 7, id, player[7]);
+        send_update(clientSockets, 15, id, player[15]);
+        return;
+    }
+    send_buffer_to_all_clients(clientSockets, &number_att, sizeof(int));
+    send_update(clientSockets, category + 1, id, player[category + 1]);
+    send_update(clientSockets, 15, id, player[15]);
 }
 
 void* run_game(void* thread_data) {
     int* clientSockets = (int*)thread_data;
-    char board[9];
+    int* player1;
+    int* player2;
 
     send_buffer_to_all_clients(clientSockets, "SRT", strlen("SRT"));
 
-    initialize_board(board);
+    player1 = initializeTable();
+    player2 = initializeTable();
 
     int prev_player_turn = 1;
     int player_turn = 0;
-    int game_over = 0;
     int turn_count = 0;
-    while (!game_over) {
+    while (turn_count < 26) {
         if (prev_player_turn != player_turn) {
             send_buffer(clientSockets[(player_turn + 1) % 2], "WAT",
                         strlen("WAT"));
         }
 
         int valid = 0;
-        int move = 0;
+        int category = 0;
+        int* dice = send_player_dices(clientSockets[player_turn]);
         while (!valid) {
-            move = get_player_move(clientSockets[player_turn]);
-            if (move == -1) break;
+            category = get_category(clientSockets[player_turn]);
+            if (category == -1) break;
+            if (player_turn == 0) {
+                valid = makeMove(player1, dice, category);
+            } else {
+                valid = makeMove(player2, dice, category);
+            }
 
-            valid = make_move(board, player_turn ? 'O' : 'X', move);
             if (!valid) {
-                send_buffer(clientSockets[(player_turn + 1) % 2], "INV",
-                            strlen("INV"));
+                send_buffer(clientSockets[player_turn], "INV", strlen("INV"));
             }
         }
+        free(dice);
 
-        if (move == -1) {
+        if (category == -1) {
             break;
         } else {
-            send_update(clientSockets, move, player_turn);
-
-            game_over = check_win(board);
-
-            if (game_over == 1) {
-                send_buffer(clientSockets[player_turn], "WIN", strlen("WIN"));
-                send_buffer(clientSockets[(player_turn + 1) % 2], "LSE",
-                            strlen("LSE"));
-            } else if (turn_count == 8) {
-                send_buffer_to_all_clients(clientSockets, "DRW", strlen("DRW"));
-                game_over = 1;
+            if (player_turn == 0) {
+                send_updated_table(clientSockets, player1, category, 0);
+            } else {
+                send_updated_table(clientSockets, player2, category, 1);
             }
 
             prev_player_turn = player_turn;
             player_turn = (player_turn + 1) % 2;
             turn_count++;
         }
+    }
+
+    if (player1[15] > player2[15]) {
+        send_buffer(clientSockets[0], "WIN", strlen("WIN"));
+        send_buffer(clientSockets[1], "LSE", strlen("LSE"));
+    } else if (player1[15] < player2[15]) {
+        send_buffer(clientSockets[1], "WIN", strlen("WIN"));
+        send_buffer(clientSockets[0], "LSE", strlen("LSE"));
+    } else {
+        send_buffer_to_all_clients(clientSockets, "DRW", strlen("DRW"));
     }
 
     close(clientSockets[0]);
@@ -150,8 +194,10 @@ void* run_game(void* thread_data) {
     playersConnected -= 2;
     pthread_mutex_unlock(&mutexCount);
     free(clientSockets);
+    freeTable(player1, player2);
 
-    printf("Numero de jogadores conectados atualizado: %d.\n", playersConnected);
+    printf("Numero de jogadores conectados atualizado: %d.\n",
+           playersConnected);
 
     pthread_exit(NULL);
 }

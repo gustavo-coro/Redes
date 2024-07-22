@@ -17,9 +17,12 @@ void start_socket(int*, int, struct sockaddr_in*);
 void send_buffer(int, const void*, size_t);
 void send_buffer_to_all_clients(int*, const void*, size_t);
 int receive_int(int);
+void receive_ints(int, int[5]);
 void make_connections(int*, int*, struct sockaddr_in*, socklen_t*);
-int get_player_move(int);
-void send_update(int*, int, int);
+int* send_player_dices(int);
+int get_category(int);
+void send_update(int*, int, int, int);
+void send_updated_table(int*, int*, int, int);
 void* run_game(void*);
 
 #endif
