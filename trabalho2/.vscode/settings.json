@@ -1,0 +1,25 @@
+{
+    "files.associations": {
+        "select.h": "c",
+        "unistd.h": "c",
+        "string.h": "c",
+        "servidor.h": "c",
+        "stdlib.h": "c",
+        "types.h": "c",
+        "utils.h": "c",
+        "in.h": "c",
+        "stdio.h": "c",
+        "inet.h": "c",
+        "limits.h": "c",
+        "time.h": "c",
+        "servidor_thread.h": "c",
+        "servidor_iterativo.h": "c",
+        "socket.h": "c",
+        "concurrent_server.h": "c",
+        "iterative_server.h": "c",
+        "server.h": "c",
+        "stat.h": "c",
+        "fcntl.h": "c",
+        "thread_server.h": "c"
+    }
+}
